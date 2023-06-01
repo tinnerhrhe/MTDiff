@@ -1,6 +1,6 @@
 # Readme
 
-The code and dataset of paper "Diffusion Model is an Effective Planner and Data Synthesizer for Multi-Task Reinforcement Learning" will be available soon!
+The code and dataset of the paper ["Diffusion Model is an Effective Planner and Data Synthesizer for Multi-Task Reinforcement Learning"](https://arxiv.org/pdf/2305.18459.pdf) will be available soon!
 
 Thanks for your attention!
 
