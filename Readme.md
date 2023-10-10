@@ -3,7 +3,7 @@
 This is the official code for the paper ["Diffusion Model is an Effective Planner and Data Synthesizer for Multi-Task Reinforcement Learning"](https://arxiv.org/abs/2305.18459). 
 We propose a diffusion-based effective planner and data synthesizer for multi-task RL.
 
-![](E:\2023-2\nips23\image\models.jpg)
+![](./models.jpg)
 ## Dataset
 You can download our dataset via this [Google Drive link](https://drive.google.com/drive/folders/1Ce11F4C6ZtmEoVUzpzoZLox4noWcxCEb?usp=sharing).
 ## Instructions 
