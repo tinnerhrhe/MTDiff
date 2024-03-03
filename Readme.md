@@ -6,6 +6,11 @@ We propose a diffusion-based effective planner and data synthesizer for multi-ta
 ![](./models.jpg)
 ## Dataset
 You can download our dataset via this [Google Drive link](https://drive.google.com/drive/folders/1Ce11F4C6ZtmEoVUzpzoZLox4noWcxCEb?usp=sharing).
+## Installation
+```
+conda env create -f environment.yml
+conda activate mtdiff
+```
 ## Instructions 
 
 Train a MTDiff-p with:
