@@ -20,8 +20,8 @@ logbase = 'logs'
 base = {
     'diffusion': {
         ## model
-        'model': 'models.TasksAttTemporalUnet',
-        'diffusion': 'models.GaussianDiffusion',
+        'model': 'models.Tasksmeta',
+        'diffusion': 'models.GaussianActDiffusion',
         'env_id': 'dial-turn-v2',
         'horizon': 32,#100
         'n_diffusion_steps': 200,
