@@ -71,7 +71,7 @@ base = {
         'n_steps_per_epoch': 200000,
         'loss_type': 'huber',
         'n_train_steps': 2e6,
-        'batch_size': 128,
+        'batch_size': 16,
         'learning_rate': 2e-4,
         'gradient_accumulate_every': 2,
         'ema_decay': 0.995,
