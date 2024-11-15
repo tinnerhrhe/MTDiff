@@ -522,3 +522,146 @@ class TasksmetaAug(nn.Module):
         next_state_preds = self.predict_state(x[:,3])
         output = torch.cat([state_preds, act_preds, reward_preds, next_state_preds], dim=-1)
         return output
+class TasksAug(nn.Module):
+    "MT-Diffuser with a Transformer backbone"
+
+    def __init__(
+            self,
+            horizon,
+            transition_dim,
+            cond_dim,
+            num_tasks,
+            dim=128,
+            dim_mults=(1, 2, 4, 8),
+            attention=False,
+            depth=56,
+            mlp_ratio=4.0,
+            hidden_size=256,
+            num_heads=8,
+            train_device=None,
+            prompt_trajectories=None,
+            task_list=None,
+            action_dim=None,
+            max_ep_len=1000,
+    ):
+        super().__init__()
+        self.num_tasks = num_tasks
+        self.dim = dim
+        self.horizon = horizon
+        self.hidden_size = hidden_size
+        self.state_dim = transition_dim - 1
+        self.action_dim = action_dim
+        self.prompt_trajectories = prompt_trajectories
+        self.task_list = task_list
+        config = transformers.GPT2Config(
+            vocab_size=1,  # doesn't matter -- we don't use the vocab
+            n_embd=hidden_size,
+            n_layer=6,
+            n_head=4,
+            n_inner=4 * 256,
+            activation_function='mish',
+            n_positions=1024,
+            n_ctx=1023,
+            resid_pdrop=0.1,
+            attn_pdrop=0.1,
+        )
+        self.time_mlp = nn.Sequential(
+            SinusoidalPosEmb(2*dim),
+            nn.Linear(2*dim, dim * 4),
+            nn.Mish(),
+            nn.Linear(dim * 4, 2*dim),
+        )
+        self.reward_mlp = nn.Sequential(
+            nn.Linear(1, dim * 2),
+            nn.Mish(),
+            nn.Linear(dim * 2, 2*dim),
+        )
+        self.state_mlp = nn.Sequential(
+            nn.Linear(self.state_dim, dim * 2),
+            nn.Mish(),
+            nn.Linear(dim * 2, 2 * dim),
+        )
+        self.action_mlp = nn.Sequential(
+            nn.Linear(self.action_dim, dim * 2),
+            nn.Mish(),
+            nn.Linear(dim * 2, 2 * dim),
+        )
+        self.prompt_embed = nn.Sequential(
+            nn.LayerNorm(self.state_dim + self.action_dim),
+            nn.Linear(self.state_dim + self.action_dim, hidden_size * 2),  # TODO
+            nn.Mish(),
+            nn.Linear(hidden_size * 2, 4 * hidden_size),
+            nn.Mish(),
+            nn.Linear(4 * hidden_size, hidden_size),
+        )
+        self.mask_dist = Bernoulli(probs=0.8)
+        self.transformer = GPT2Model(config)
+        self.embed_ln = nn.LayerNorm(hidden_size)
+        ''' 1(T_i)+50(prompt)+16(modeling sequence)'''
+        self.position_emb = nn.Parameter(torch.zeros(1, 131, hidden_size))
+
+        # note: we don't predict states or returns for the paper
+        self.predict_act = nn.Sequential(
+            nn.Linear(dim * 2, dim * 2),
+            nn.Mish(),
+            nn.Linear(dim * 2, self.action_dim),
+        )
+        self.predict_state = nn.Sequential(
+            nn.Linear(dim * 2, dim * 2),
+            nn.Mish(),
+            nn.Linear(dim * 2, self.state_dim),
+        )
+        self.predict_reward = nn.Sequential(
+            nn.Linear(dim * 2, dim * 2),
+            nn.Mish(),
+            nn.Linear(dim * 2, 1),
+        )
+        #self.predict_return = torch.nn.Linear(hidden_size, 1)
+
+    def forward(self, x, time, cond, x_condition=None, force=False, return_cond=False, flag=False, attention_mask=None):
+        '''
+            x : [ batch x horizon x transition ]
+        '''
+        cond = cond.long()
+        prompt_data = get_prompt_batchs(self.prompt_trajectories, cond, num_episodes=1, num_steps=50, is_meta=False)
+        prompt_data = prompt_data.to(device=x.device, dtype=torch.float32).reshape(cond.shape[0], -1, self.state_dim+self.action_dim)#TODO
+        prompt_embeddings = self.prompt_embed(prompt_data)
+        states, actions, rewards, next_states = x[:, :, :self.state_dim], x[:, :, self.state_dim:self.state_dim+self.action_dim], \
+                                               x[:, :, self.state_dim+self.action_dim:self.state_dim+self.action_dim+1], \
+                                               x[:, :, self.state_dim+self.action_dim+1:]
+        state_embeddings = self.state_mlp(states)
+        next_state_embeddings = self.state_mlp(next_states)
+        action_embeddings = self.action_mlp(actions)
+        reward_embeddings = self.reward_mlp(rewards)
+        t = self.time_mlp(time).unsqueeze(1)
+        #if not force:
+        #    mask = self.mask_dist.sample(sample_shape=(cond.shape[0], 1)).to(x.device)
+        #else:
+        #    mask = 1 if return_cond else 0
+        batch_size, seq_length = x.shape[0], x.shape[1]
+        addition_length = 50 + 1 #TODO
+        addition_attention_mask = torch.ones((batch_size, addition_length), dtype=torch.long, device=x.device)
+        if attention_mask is None:
+            # attention mask for GPT: 1 if can be attended to, 0 if not
+            attention_mask = torch.ones((batch_size, 4 * seq_length), dtype=torch.long, device=x.device)
+            '''set attention mask'''
+        stacked_inputs = torch.stack(
+            (state_embeddings, action_embeddings, reward_embeddings, next_state_embeddings), dim=1
+        ).permute(0, 2, 1, 3).reshape(batch_size, 4 * seq_length, self.hidden_size)
+        all_inputs = torch.cat((t, prompt_embeddings, stacked_inputs), dim=1)
+        stacked_attention_mask = torch.cat(
+            (addition_attention_mask, attention_mask), dim=1)
+        final_inputs = t * all_inputs + self.position_emb[:, :all_inputs.shape[1], :]
+        final_inputs = self.embed_ln(final_inputs)
+        transformer_outputs = self.transformer(
+            inputs_embeds=final_inputs,
+            attention_mask=stacked_attention_mask,
+        )
+        x = transformer_outputs['last_hidden_state'][:, -4 * seq_length:, :]
+        x = x.reshape(batch_size, seq_length, 4, self.hidden_size).permute(0, 2, 1, 3)
+        act_preds = self.predict_act(x[:, 1])  # predict next state given state and action
+        state_preds = self.predict_state(x[:, 0])
+        reward_preds = self.predict_reward(x[:, 2])
+        next_state_preds = self.predict_state(x[:,3])
+        output = torch.cat([state_preds, act_preds, reward_preds, next_state_preds], dim=-1)
+        return output
