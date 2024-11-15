@@ -329,3 +329,54 @@ class MazeDataset(MetaSequenceDataset):
         # rtg = self.discount_cumsum(self.fields['rewards'][path_inds, :], gamma=self.discount)[:, :end - start] / 400.
         batch = TaskBatch(actions, observations, task, rtg)
         return batch
+class AugDataset(DMCSequenceDataset):
+    '''
+        adds a value field to the datapoints for training the value function
+    '''
+
+    def __init__(self, *args, discount=0.99, normed=True, seq_length=2, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.discount = discount
+        self.seq_length = seq_length
+    def make_indices(self, path_lengths, horizon):
+        '''
+            makes indices for sampling from dataset;
+            each index maps to a datapoint
+        '''
+        indices = []
+        for i, path_length in enumerate(path_lengths):
+            #if i % 10: continue
+            max_start = min(path_length - 2, self.max_path_length - horizon - 1)
+            if not self.use_padding:
+                max_start = min(max_start, path_length - horizon)
+            for start in range(max_start):
+                end = start + horizon
+                indices.append((i, start, end))
+        indices = np.array(indices)
+        return indices
+
+    def normalize(self, keys=['observations', 'actions', 'rewards',]):#, 'observations', 'rewards'
+        '''
+            normalize fields that will be predicted by the diffusion model
+        '''
+        for key in keys:
+            array = self.fields[key].reshape(self.n_episodes*self.max_path_length, -1)
+            normed = self.normalizer(array, key)
+            self.fields[f'normed_{key}'] = normed.reshape(self.n_episodes, self.max_path_length, -1)
+    def __len__(self):
+        return len(self.indices)
+    def __getitem__(self, idx, eps=1e-4):
+        path_ind, start, end = self.indices[idx]
+        path_inds = []
+        interval = int(self.fields.n_episodes/len(self.task_list))
+        for i in range(len(self.task_list)):
+            path_inds.append((path_ind+interval*i)%self.fields.n_episodes)
+        actions = self.fields.normed_actions[path_inds, start:end]
+        observations = self.fields.normed_observations[path_inds, start:end]
+        rewards = self.fields.normed_rewards[path_inds, start:end].reshape(len(self.task_list), end-start, 1)
+        next_observations = self.fields.normed_observations[path_inds, start+1:end+1]
+        trajectories = np.concatenate([observations, actions, rewards, next_observations], axis=-1)
+        task = np.array([self.task_list.index(self.fields.get_task(path_ind)) for path_ind in path_inds])#self.get_task_id(self.fields.get_task(path_ind))
+        #print(task.shape)
+        batch = AugBatch(trajectories, task)
+        return batch
