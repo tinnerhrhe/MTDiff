@@ -29,3 +29,4 @@ dependencies:
     - ml_logger==0.8.69 
     - jaynes==0.8.11 
     - params_proto==2.9.6
+    - transformers
